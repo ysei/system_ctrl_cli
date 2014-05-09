@@ -73,7 +73,7 @@ class SystemCtrlCli < Thor
       t.column :status, :string
     end
 
-    ActiveRecord::Migration.create_table :SystemCtrlCli_states do |t|
+    ActiveRecord::Migration.create_table :system_ctrl_cli_states do |t|
       t.column :current_target, :string
     end
     SystemCtrlCliState.create(
