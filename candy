@@ -1,0 +1,328 @@
+#!/usr/bin/env ruby
+# -*- coding: utf-8 -*-
+
+require 'thor'
+require 'yaml'
+require 'sqlite3'
+require 'active_record'
+
+require './dsv.rb'
+
+class SystemCtrlCli < Thor
+  default_command :help
+  
+  desc 'hello', 'サンプル'
+  def hello
+    say "hello (info)", :green
+    say "hello (warn)", :yellow
+    say "hello (error)", :red
+    say "hello (debug)"
+  end
+
+  desc 'init', '状態保存のためのデータベースの初期化'
+  def init
+    if File.exists?("db/system_manage.db")
+      r = ask("db/system_manage.db exists. Overwrite? [y/n]", :yellow)
+      if r == 'y'
+        File.unlink("db/system_manage.db")
+        db = SQLite3::Database.new("db/system_manage.db")
+        say "db/system_manage.db created.", :green
+        db.close
+      else
+        return
+      end
+    else
+      db = SQLite3::Database.new("db/system_manage.db")
+      say "db/system_manage.db created.", :green
+      db.close
+    end
+    ActiveRecord::Base.establish_connection(
+                                            :adapter => 'sqlite3',
+                                            :database => './db/system_manage.db')
+    ActiveRecord::Migration.create_table :dsv_systems do |t|
+      t.column :name, :string
+      t.column :status, :string
+    end
+    ActiveRecord::Migration.create_table :dsv_subnets do |t|
+      t.column :name, :string
+      t.column :network, :string
+      t.column :netmask, :string
+      t.column :dsv_system_id, :integer
+      t.column :status, :string
+    end
+    ActiveRecord::Migration.create_table :dsv_nodes do |t|
+      t.column :name, :string
+      t.column :dsv_system_id, :integer
+      t.column :dsv_subnet_id, :integer
+      t.column :status, :string
+      t.column :roles, :text
+    end
+    ActiveRecord::Migration.create_table :dsv_roles do |t|
+      t.column :name, :string
+      t.column :apls, :text
+    end
+    ActiveRecord::Migration.create_table :dsv_ifs do |t|
+      t.column :name, :string
+      t.column :dsv_node_id, :integer
+      t.column :ipaddr, :string
+      t.column :status, :string
+    end
+    ActiveRecord::Migration.create_table :dsv_apls do |t|
+      t.column :name, :string
+      t.column :dsv_node_id, :integer
+      t.column :status, :string
+    end
+
+    ActiveRecord::Migration.create_table :SystemCtrlCli_states do |t|
+      t.column :current_target, :string
+    end
+    SystemCtrlCliState.create(
+                       :current_target => ""
+                       )
+
+  end
+
+  desc 'load <system definition file>', 'システム状態の定義yamlファイルからの読み込み'  
+  def load (yaml)
+    data = YAML.load_file(yaml)
+#    say("loading #{data}", :green)
+    say("loading system #{data['name']}....", :green)
+    ActiveRecord::Base.establish_connection(
+                                            :adapter => 'sqlite3',
+                                            :database => 'db/system_manage.db')
+    dsv_system = DsvSystem.new(
+                               :name => data['name']
+                               )
+    nn = 0
+    data['nodes'].each do |nd|
+      dsv_system.dsv_nodes.build
+      dsv_system.dsv_nodes[nn].name = nd['name']
+      ni = 0
+      data['nodes'][nn]['ifs'].each do |dsvif|
+        dsv_system.dsv_nodes[nn].dsv_ifs.build
+        dsv_system.dsv_nodes[nn].dsv_ifs[ni].name = dsvif['if']
+        dsv_system.dsv_nodes[nn].dsv_ifs[ni].ipaddr = dsvif['ipaddr']
+        ni += 1
+      end
+      nn += 1                                                 
+    end
+    
+    sbnn = 0
+    data['subnets'].each do |sbn|
+      dsv_system.dsv_subnets.build
+      dsv_system.dsv_subnets[sbnn].name = sbn['name']
+      dsv_system.dsv_subnets[sbnn].network = sbn['network']
+      dsv_system.dsv_subnets[sbnn].netmask = sbn['netmask']
+      sbnn += 1
+    end
+    if DsvSystem.where("name = ?", data['name']).length > 0
+      r = ask("There exists a system #{data['name']}. Overwrite? [y/n]", :yellow)
+      if r == "y"
+        DsvSystem.where("name = ?", data['name']).first.destroy
+        say("overwrite #{data['name']}", :green)
+        dsv_system.save
+      else
+        say("no operation", :green)
+        return
+      end
+    else
+      dsv_system.save
+    end
+    stat = SystemCtrlCliState.first
+    stat.current_target = data['name']
+    say "Load completed. Current target is '#{stat.current_target}'.", :green
+    stat.save
+  end
+
+
+  desc 'export <system name>', 'システム情報をyamlファイルに書き出す'
+  def export(system)
+    say "Sorry. Not be implemented yet.", :yellow
+  end
+
+  desc 'use <system name>', '操作対象のシステムを切り替える'
+  def use (system)
+    ActiveRecord::Base.establish_connection(
+                                            :adapter => 'sqlite3',
+                                            :database => 'db/system_manage.db')
+    if DsvSystem.where("name = ?", system).length > 0 then
+      stat = SystemCtrlCliState.first
+      stat.current_target = system
+      say "Current Target is '#{stat.current_target}'", :green
+      stat.save
+    else
+      say "There is no system '#{system}'.", :yellow
+    end
+  end
+
+  desc 'current', '現在操作対象のシステムを表示する'
+  def current
+    ActiveRecord::Base.establish_connection(
+                                            :adapter => 'sqlite3',
+                                            :database => 'db/system_manage.db')
+    stat = SystemCtrlCliState.first
+    say "Current Target is '#{stat.current_target}'", :green
+  end
+
+  desc 'node <name> <action>', 'Nodeに対する各種操作'
+  long_desc <<-DOC
+    <name>: target node name \n
+
+    <action>: Action which will be executed on the specified node.\n 
+
+              Available commands are shown as follows. \n
+
+    reachable?: monitor if the specified node is reachable.\n
+
+    xxx: \n
+
+    yyy: \n
+  DOC
+  def node (name, action, *params)
+    ActiveRecord::Base.establish_connection(
+                                            :adapter => 'sqlite3',
+                                            :database => 'db/system_manage.db')
+    node = DsvNode.where("name = ?", name).first
+    if node == nil then
+      say "There is no node of '#{name}'.", :red
+      return
+    end
+    case action
+    when 'reachable?'
+      if node.if_reachable
+        say "reachable", :green
+      else
+        say "unreachable", :red
+      end
+    when 'exec'
+      say "Specified command is '#{params[0]}'", :green
+      say "Sorry. Not be implemented yet.", :green
+    when 'script'
+      say "Specified script is '#{params[0]}'", :green
+      say "Sorry. Not be implemented yet.", :green
+    when 'append'
+      if params.length < 1 then
+        say "usage: <> node append [additional command] [*parameters]", :yellow
+        return
+      end
+      case params[0]
+      when 'app'
+        if params.length < 2 then
+          say "usage: <> node append app [app name]", :yellow
+          return
+        end
+        say "Sorry. Not be implemented yet.", :green
+        say "This command will configure this node to be installed a specified application.", :green
+      when 'if'
+        if params.length < 2 then
+          say "usage: <> node append if [ipaddr] [netmask]", :yellow
+          return
+        end
+        say "Sorry. Not be implemented yet.", :green
+        say "This command will add inteface whose address and netmask are '#{params[1]}' and '#{params[2]}' respectively.", :green
+      end
+    when 'deploy'
+      say "Deploy specified applications...", :green
+      say "Sorry. Not be implemented yet.", :green
+    end
+
+  end
+
+  desc 'history <action>', 'コマンドヒストリ'
+  def history(action)
+    ActiveRecord::Base.establish_connection(
+                                            :adapter => 'sqlite3',
+                                            :database => 'db/system_manage.db')
+    
+  end
+
+  desc 'unload <system>', 'Systemをunload (実体は消さない)'
+  def unload(system)
+    ActiveRecord::Base.establish_connection(
+                                            :adapter => 'sqlite3',
+                                            :database => 'db/system_manage.db')
+    current = SystemCtrlCliState.first.current_target
+    if system != current then
+      say "Switch current system to #{system}", :yellow
+      return
+    end
+    system = DsvSystem.where("name = ?", system).first
+    if system != nil then
+      system.destroy
+      say "System '#{system}' is successfully unloaded.", :green
+    end
+  end
+
+  desc 'deploy', '定義にあるNode, APLを一括構築・配備する.ID4Pへ'
+  def deploy
+    ActiveRecord::Base.establish_connection(
+                                            :adapter => 'sqlite3',
+                                            :database => 'db/system_manage.db')
+    current = SystemCtrlCliState.first.current_target
+    system = DsvSystem.where("name = ?", current).includes(:nodes, :subnets)
+    say "Target of Deployment:", :green
+    say "\t#{system.to_s}"
+    r = ask("System '#{current}' will be deployed. OK? [y/n]", :green)
+    if r == "y" then
+      say "Under system deployment...", :green
+      say "Sorry. Not be implemented yet.", :green
+    else
+      say "System deploy is canceled.", :green
+      return
+    end
+  end
+
+  desc 'list <nodes/subnets/systems>', 'node/subnet/system一覧を表示する'
+  def list (target)
+    ActiveRecord::Base.establish_connection(
+                                            :adapter => 'sqlite3',
+                                            :database => 'db/system_manage.db')
+    case target
+    when 'nodes' then
+      current_id = DsvSystem.where("name = ?", SystemCtrlCliState.first.current_target).first.id
+      arry = []
+      arry.append(['id', 'name', 'ifs'])
+      dsv_nodes = DsvNode.all.load
+      DsvNode.all.each do |n|
+        if n.dsv_system_id != current_id then
+          next
+        end
+        entry = []
+        entry.append(n.id)
+        entry.append(n.name)
+        ifinfo = []
+        n.dsv_ifs.each do |dsvif|
+          ifinfo.append("#{dsvif.name}: #{dsvif.ipaddr}")
+        end
+        entry.append(ifinfo)
+        arry.append(entry)
+      end
+      print_table(arry)
+
+    when 'subnets' then
+      
+      print_table(DsvSubnet.all)
+    when 'systems' then
+      current = SystemCtrlCliState.first.current_target
+      arry = []
+      arry.append(['id', 'name', 'target'])
+      DsvSystem.all.each do |e|
+        etry = []
+        etry.append(e.id)
+        etry.append(e.name)
+        if e.name == current then
+          etry.append('*')
+        else
+          etry.append('')
+        end
+        arry.append(etry)
+      end
+      print_table(arry)
+    when 'roles' then
+      
+    end
+
+  end
+end
+
+SystemCtrlCli.start

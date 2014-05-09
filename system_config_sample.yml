@@ -1,0 +1,41 @@
+name: system1
+
+desc: system for xxxx
+
+nodes:
+  -
+    name: nd1
+    ifs: 
+      -
+        if: eth0
+        ipaddr: 10.25.165.1
+      -
+        if: eth1
+        ipaddr: 10.10.10.100
+    desc: xxx
+  -
+    name: nd2
+    ifs:
+      - 
+        if: eth0
+        ipaddr: 192.168.10.101
+    desc: xxx
+  -
+    name: nd3
+    ifs:
+      - 
+        if: eth0
+        ipaddr: 192.168.10.102
+    desc: xxx
+  
+subnets:
+  -
+    name: sn1
+    network: 192.168.10.0
+    netmask: 255.255.255.0
+  -
+    name: sn2
+    network: 10.10.10.0
+    netmask: 255.255.255.0
+
+
